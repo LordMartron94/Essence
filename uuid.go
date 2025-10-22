@@ -2,14 +2,119 @@ package essence
 
 import (
 	"crypto/rand"
+	"crypto/sha1"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
 
 // UUID represents a 128-bit (16 byte) universally unique identifier.
 type UUID [16]byte
+
+// String returns the canonical textual representation of the UUID:
+// 8-4-4-4-12 lowercase hexadecimal groups.
+func (id UUID) String() string {
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		binary.BigEndian.Uint32(id[0:4]),
+		binary.BigEndian.Uint16(id[4:6]),
+		binary.BigEndian.Uint16(id[6:8]),
+		binary.BigEndian.Uint16(id[8:10]),
+		id[10:16],
+	)
+}
+
+// UUIDFromString parses a canonical textual UUID representation into a UUID value.
+// The expected format is 8-4-4-4-12 lowercase hexadecimal groups separated by dashes,
+// e.g. "123e4567-e89b-12d3-a456-426614174000".
+func UUIDFromString(s string) (UUID, error) {
+	var id UUID
+
+	// ───── 1. Normalize ─────
+	s = strings.TrimSpace(s)
+
+	// Expected total length = 36 chars (32 hex + 4 dashes)
+	if len(s) != 36 {
+		return UUID{}, fmt.Errorf("invalid UUID length")
+	}
+
+	// ───── 2. Validate dash positions ─────
+	if s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-' {
+		return UUID{}, fmt.Errorf("invalid UUID format (expected 8-4-4-4-12)")
+	}
+
+	// ───── 3. Remove dashes ─────
+	hexStr := strings.ReplaceAll(s, "-", "")
+
+	// ───── 4. Decode 32 hex chars → 16 bytes ─────
+	bytes, err := hex.DecodeString(hexStr)
+	if err != nil {
+		return UUID{}, err
+	}
+	if len(bytes) != 16 {
+		return UUID{}, fmt.Errorf("invalid UUID byte length")
+	}
+
+	copy(id[:], bytes)
+	return id, nil
+}
+
+// =============================================================================
+
+// UUIDv4Generate generates a Version 4 (random) UUID as defined in RFC 9562 § 5.4.
+//   - 128 bits of cryptographically secure random data
+//   - version field set to 0b0100 (4)
+//   - variant field set to 0b10 (IETF layout)
+func UUIDv4Generate() (UUID, error) {
+	var uuid UUID
+
+	// ───── 1. Fill all 16 bytes with CSPRNG output ─────
+	if _, err := rand.Read(uuid[:]); err != nil {
+		return UUID{}, err
+	}
+
+	// ───── 2. Set version (0b0100) in bits 48–51 (octet 6) ─────
+	uuid[6] &= 0x0F // clear high 4 bits
+	uuid[6] |= 0x40 // set version 4 (0100 xxxx)
+
+	// ───── 3. Set variant (0b10) in bits 64–65 (octet 8) ─────
+	uuid[8] &= 0x3F // clear top 2 bits
+	uuid[8] |= 0x80 // set variant 10 xxxxxx
+
+	return uuid, nil
+}
+
+// UUIDv5Generate generates a Version 5 name-based UUID as defined in RFC 9562 §5.5.
+// The resulting UUID is deterministic for a given (namespace, name) pair.
+//
+// Algorithm:
+//  1. Concatenate the 16-byte namespace UUID and the UTF-8 bytes of name.
+//  2. Compute SHA-1 digest of that sequence (20 bytes).
+//  3. Take the first 16 bytes (128 bits) of the digest.
+//  4. Set the version field (bits 48–51) to 0101 (version 5).
+//  5. Set the variant field (bits 64–65) to 10 (RFC 9562/IETF layout).
+func UUIDv5Generate(namespace UUID, name string) UUID {
+	var uuid UUID
+
+	h := sha1.New()
+	h.Write(namespace[:])
+	h.Write([]byte(name))
+	sum := h.Sum(nil) // 20 bytes
+
+	copy(uuid[:], sum[:16]) // keep the 128 most significant bits
+
+	// ───── Set version (0b0101 = 5) in bits 48–51 (octet 6) ─────
+	uuid[6] &= 0x0F
+	uuid[6] |= 0x50 // upper 4 bits = 0101 (0x5 << 4)
+
+	// ───── Set variant (0b10) in bits 64–65 (octet 8) ─────
+	uuid[8] &= 0x3F // clear top 2 bits
+	uuid[8] |= 0x80 // set 10xxxxxx
+
+	return uuid
+}
 
 // ============================================================================
 // ── Variant 1: Pure Random (RFC 9562 §5.7) ───────────────────────────────────
@@ -121,20 +226,4 @@ func UUIDv7GenerateMonotonic() (UUID, error) {
 	copy(uuid[8:], randB[:])
 
 	return uuid, nil
-}
-
-// ============================================================================
-// ── String Formatting ───────────────────────────────────────────────────────
-// ============================================================================
-
-// String returns the canonical textual representation of the UUID:
-// 8-4-4-4-12 lowercase hexadecimal groups.
-func (id UUID) String() string {
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
-		binary.BigEndian.Uint32(id[0:4]),
-		binary.BigEndian.Uint16(id[4:6]),
-		binary.BigEndian.Uint16(id[6:8]),
-		binary.BigEndian.Uint16(id[8:10]),
-		id[10:16],
-	)
 }
