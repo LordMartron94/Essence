@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"foundation"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,15 @@ func (id UUID) String() string {
 		binary.BigEndian.Uint16(id[6:8]),
 		binary.BigEndian.Uint16(id[8:10]),
 		id[10:16],
+	)
+}
+
+// ToUint128 converts the 16-byte UUID into a foundation.Uint128.
+// This allows zero-allocation bitwise and mathematical operations on the identifier.
+func (id UUID) ToUint128() foundation.Uint128 {
+	return foundation.Uint128New(
+		binary.BigEndian.Uint64(id[8:16]), // Lo: Bytes 8-15
+		binary.BigEndian.Uint64(id[0:8]),  // Hi: Bytes 0-7
 	)
 }
 
